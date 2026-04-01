@@ -508,30 +508,53 @@
                     </div>
 
                     {{-- Invoice --}}
-                    <div class="dcard">
-                        <div class="dcard-title"><i class="bi bi-receipt"></i> Invoice Summary</div>
-                        <div class="invoice-rows">
-                            <div class="inv-row"><span>Subtotal</span><span class="val">{{ number_format($singleOrder->subtotal,2,',','.') }} ₺</span></div>
-                            <div class="inv-row">
-                                <span>Shipping Cost</span>
-                                <span class="val" style="color:#059669">{{ $singleOrder->shipping_cost > 0 ? number_format($singleOrder->shipping_cost,2,',','.').' ₺' : 'Free' }}</span>
-                            </div>
-                            <div class="inv-row">
-    <span>VAT (18%)</span>
-    <span class="val">{{ number_format($singleOrder->tax_amount, 2, ',', '.') }} ₺</span>
+<div class="dcard">
+    <div class="dcard-title"><i class="bi bi-receipt"></i> Invoice Summary</div>
+    <div class="invoice-rows">
+
+        @php
+            $shipping = $singleOrder->shipping_cost ?? 0;
+            $discount = $singleOrder->discount_amount ?? 0;
+
+            // KDV hariç subtotal: iptal edilmemiş item'lar
+            $subtotal = $singleOrder->items
+                ->where('status', '!=', 'cancelled')
+                ->sum(fn($i) => $i->unit_price * $i->quantity);
+
+            $vatAmount = $subtotal * 0.18;
+            $total     = $subtotal + $vatAmount + $shipping - $discount;
+        @endphp
+
+        <div class="inv-row">
+            <span>Subtotal</span>
+            <span class="val">{{ number_format($subtotal, 2, ',', '.') }} ₺</span>
+        </div>
+        <div class="inv-row">
+            <span>Shipping</span>
+            <span class="val" style="color:#059669">
+                {{ $shipping > 0 ? number_format($shipping, 2, ',', '.') . ' ₺' : 'Free' }}
+            </span>
+        </div>
+        <div class="inv-row">
+            <span>VAT (18%)</span>
+            <span class="val">{{ number_format($vatAmount, 2, ',', '.') }} ₺</span>
+        </div>
+        @if($discount > 0)
+            <div class="inv-row">
+                <span>Discount</span>
+                <span class="val" style="color:#dc2626">
+                    -{{ number_format($discount, 2, ',', '.') }} ₺
+                </span>
+            </div>
+        @endif
+
+    </div>
+    <div class="inv-total-row">
+        <span class="lbl">Total Payment</span>
+        <span class="amount">{{ number_format($total, 2, ',', '.') }} ₺</span>
+    </div>
 </div>
-                            @if(($singleOrder->discount_amount ?? 0) > 0)
-                                <div class="inv-row"><span>Discount</span><span class="val" style="color:#dc2626">-{{ number_format($singleOrder->discount_amount,2,',','.') }} ₺</span></div>
-                            @endif
-                        </div>
-                        <div class="inv-total-row">
-                            <span class="lbl">Total Payment</span>
-                            <span class="amount">{{ number_format($singleOrder->total,2,',','.') }} ₺</span>
-                        </div>
-                    </div>
-
-                </div>
-
+</div>
                 {{-- RIGHT COLUMN --}}
                 <div style="display:flex;flex-direction:column;gap:24px;">
                     <div class="dcard">
