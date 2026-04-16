@@ -597,13 +597,16 @@
     activeSection: 'products',
     showScrollTop: false,
     toasts: [],
-    
-    openQuickView(item) {
-        this.selectedItem = item;
-        this.activeVariant = item.all_variants ? item.all_variants[0] : item.variants[0];
-        this.descOpen = false;
-        this.quickView = true;
-    },
+ openQuickView(item) {
+    this.selectedItem = item;
+    // all_variants içinden mevcut color_code'a uyan ilk varyantı bul
+    const matchingVariant = item.all_variants 
+        ? item.all_variants.find(v => v.color_code === item.color_code) 
+        : null;
+    this.activeVariant = matchingVariant || (item.all_variants ? item.all_variants[0] : item.variants[0]);
+    this.descOpen = false;
+    this.quickView = true;
+},
     
     btnScrollModal(dir) {
         const c = this.$refs.modalTrack;
@@ -1279,7 +1282,10 @@
                             <input type="email" x-model="form.email" required placeholder="john@example.com" class="contact-input-modern">
                         </div>
                     </div>
-
+<div>
+    <label class="block text-sm font-bold text-slate-700 mb-1.5 sm:mb-2">Subject</label>
+    <input type="text" x-model="form.subject" placeholder="Subject" class="contact-input-modern">
+</div>
                     <div>
                         <label class="block text-sm font-bold text-slate-700 mb-1.5 sm:mb-2">Message *</label>
                         <textarea x-model="form.message" rows="4" required placeholder="Tell us about your inquiry..." class="contact-input-modern resize-none"></textarea>
