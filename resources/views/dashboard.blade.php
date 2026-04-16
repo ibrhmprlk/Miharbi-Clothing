@@ -1351,7 +1351,7 @@ function btnScroll(id, dir) {
 function contactForm() {
     return {
         loading: false,
-        form: { name: '', email: '', message: '' },
+        form: { name: '', email: '', subject: '', message: '' },
         async submit() {
             if (this.loading) return;
             if (!this.form.name || !this.form.email || !this.form.message) {
@@ -1363,13 +1363,14 @@ function contactForm() {
                 const formData = new FormData();
                 formData.append('name', this.form.name);
                 formData.append('email', this.form.email);
+                formData.append('subject', this.form.subject);
                 formData.append('message', this.form.message);
                 formData.append('_token', document.querySelector('meta[name=csrf-token]').content);
                 const response = await fetch('{{ route('contact.send') }}', { method: 'POST', body: formData, headers: { 'X-Requested-With': 'XMLHttpRequest', 'Accept': 'application/json' } });
                 const data = await response.json();
                 if (response.ok && data.success) {
                     window.dispatchEvent(new CustomEvent('toast', { detail: { type: 'success', title: 'Success!', message: data.message || 'Your message has been sent successfully.' } }));
-                    this.form = { name: '', email: '', message: '' };
+                    this.form = { name: '', email: '', subject: '', message: '' };
                 } else { throw new Error(data.message || 'An error occurred.'); }
             } catch (error) {
                 window.dispatchEvent(new CustomEvent('toast', { detail: { type: 'error', title: 'Error!', message: error.message || 'Failed to send message.' } }));
