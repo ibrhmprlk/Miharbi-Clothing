@@ -882,23 +882,24 @@
                 </div>
                 @endif
             </div>
-            <div class="contact-form-card" x-data="contactForm()">
-                <div class="flex items-center gap-3 sm:gap-4 mb-6 sm:mb-8">
-                    <div class="w-12 h-12 sm:w-14 sm:h-14 bg-indigo-50 rounded-2xl flex items-center justify-center text-indigo-600 shrink-0"><i class="bi bi-send-fill text-xl sm:text-2xl"></i></div>
-                    <div><h3 class="text-xl sm:text-2xl font-bold text-slate-900">Send Message</h3><p class="text-slate-500 text-sm sm:text-base">We'll respond within 24 hours'</p></div>
-                </div>
-                <form @submit.prevent="submit" class="space-y-4 sm:space-y-5">
-                    <div class="grid grid-cols-1 sm:grid-cols-2 gap-4 sm:gap-5">
-                        <div><label class="block text-sm font-bold text-slate-700 mb-1.5 sm:mb-2">Full Name *</label><input type="text" x-model="form.name" required placeholder="John Doe" class="contact-input-modern"></div>
-                        <div><label class="block text-sm font-bold text-slate-700 mb-1.5 sm:mb-2">Email Address *</label><input type="email" x-model="form.email" required placeholder="john@example.com" class="contact-input-modern"></div>
-                    </div>
-                    <div><label class="block text-sm font-bold text-slate-700 mb-1.5 sm:mb-2">Message *</label><textarea x-model="form.message" rows="4" required placeholder="Tell us about your inquiry..." class="contact-input-modern resize-none"></textarea></div>
-                    <button type="submit" class="contact-submit-btn" :disabled="loading">
-                        <template x-if="!loading"><span class="flex items-center gap-2 sm:gap-3"><span>Send Message</span><i class="bi bi-arrow-right text-lg sm:text-xl"></i></span></template>
-                        <template x-if="loading"><span class="flex items-center gap-2 sm:gap-3"><div class="spinner"></div><span>Sending...</span></span></template>
-                    </button>
-                </form>
-            </div>
+           <div class="contact-form-card" x-data="contactForm()">
+    <div class="flex items-center gap-3 sm:gap-4 mb-6 sm:mb-8">
+        <div class="w-12 h-12 sm:w-14 sm:h-14 bg-indigo-50 rounded-2xl flex items-center justify-center text-indigo-600 shrink-0"><i class="bi bi-send-fill text-xl sm:text-2xl"></i></div>
+        <div><h3 class="text-xl sm:text-2xl font-bold text-slate-900">Send Message</h3><p class="text-slate-500 text-sm sm:text-base">We'll respond within 24 hours'</p></div>
+    </div>
+    <form @submit.prevent="submit" class="space-y-4 sm:space-y-5">
+        <div class="grid grid-cols-1 sm:grid-cols-2 gap-4 sm:gap-5">
+            <div><label class="block text-sm font-bold text-slate-700 mb-1.5 sm:mb-2">Full Name *</label><input type="text" x-model="form.name" required placeholder="John Doe" class="contact-input-modern"></div>
+            <div><label class="block text-sm font-bold text-slate-700 mb-1.5 sm:mb-2">Email Address *</label><input type="email" x-model="form.email" required placeholder="john@example.com" class="contact-input-modern"></div>
+        </div>
+        <div><label class="block text-sm font-bold text-slate-700 mb-1.5 sm:mb-2">Subject</label><input type="text" x-model="form.subject" placeholder="Enter the subject" class="contact-input-modern"></div>
+        <div><label class="block text-sm font-bold text-slate-700 mb-1.5 sm:mb-2">Message *</label><textarea x-model="form.message" rows="4" required placeholder="Tell us about your inquiry..." class="contact-input-modern resize-none"></textarea></div>
+        <button type="submit" class="contact-submit-btn" :disabled="loading">
+            <template x-if="!loading"><span class="flex items-center gap-2 sm:gap-3"><span>Send Message</span><i class="bi bi-arrow-right text-lg sm:text-xl"></i></span></template>
+            <template x-if="loading"><span class="flex items-center gap-2 sm:gap-3"><div class="spinner"></div><span>Sending...</span></span></template>
+        </button>
+    </form>
+</div>
         </div>
     </div>
 </section>
