@@ -12,194 +12,355 @@ use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Auth;
 use Illuminate\Support\Facades\Log;
+use Illuminate\Support\Str;
 
 class CheckoutController extends Controller
 {
+    // ─────────────────────────────────────────────
+    // Ortak fiyat hesaplama — TEK yer, tutarsızlık yok
+    // ─────────────────────────────────────────────
+    private function calculateTotals($cartItems): array
+    {
+        $subtotal       = collect($cartItems)->sum(fn($i) => ($i->urunVariant->discount_price ?? $i->urunVariant->price) * $i->quantity);
+        $shippingCost   = 0;
+        $discountAmount = session('discount_amount', 0);
+        $taxAmount      = ($subtotal - $discountAmount) * 0.18;
+        $total          = $subtotal - $discountAmount + $taxAmount;
+
+        return compact('subtotal', 'shippingCost', 'discountAmount', 'taxAmount', 'total');
+    }
+
+    // ─────────────────────────────────────────────
+    // Checkout sayfası
+    // ─────────────────────────────────────────────
     public function index()
     {
         $cartItems = $this->getCartItems();
-        
+
         if ($cartItems->isEmpty()) {
             return redirect()->route('cart.index')->with('error', 'Your cart is empty!');
         }
 
         foreach ($cartItems as $item) {
-            $variant = $item->urunVariant;
-            if ($variant->stock < $item->quantity) {
+            $variant        = $item->urunVariant;
+            $availableStock = $variant->stock - $variant->stock_reserved;
+            if ($availableStock < $item->quantity) {
                 return redirect()->route('cart.index')->with('error', "Insufficient stock for {$variant->urun->name}");
             }
         }
 
-        $subtotal = $cartItems->sum(function($item) {
-            $price = $item->urunVariant->discount_price ?? $item->urunVariant->price;
-            return $price * $item->quantity;
-        });
-
-        // Shipping her zaman ücretsiz
-        $shippingCost = 0;
-        $discountAmount = session('discount_amount', 0);
-        $taxAmount = ($subtotal - $discountAmount) * 0.18;
-        $total = $subtotal - $discountAmount + $taxAmount; // shippingCost çıkarıldı
-
+        $totals    = $this->calculateTotals($cartItems);
         $addresses = Auth::user()->addresses()->orderBy('is_default', 'desc')->get();
 
-        return view('PaymentInformation', compact(
-            'cartItems', 'subtotal', 'shippingCost', 
-            'discountAmount', 'taxAmount', 'total', 'addresses'
+        return view('PaymentInformation', array_merge(
+            compact('cartItems', 'addresses'),
+            $totals
         ));
     }
 
-public function process(Request $request)
-{
-    try {
-        $cartItems = $this->getCartItems();
-        
-        if ($cartItems->isEmpty()) {
-            throw new \Exception('Your cart is empty!');
-        }
+    // ─────────────────────────────────────────────
+    // Ödeme işlemi başlat
+    // ─────────────────────────────────────────────
+    public function process(Request $request)
+    {
+        try {
+            $cartItems = $this->getCartItems();
 
-        foreach ($cartItems as $item) {
-            $variant = UrunVariant::find($item->urunVariant->id);
-            if ($variant->stock < $item->quantity) {
-                throw new \Exception("Insufficient stock for {$variant->urun->name}");
+            if ($cartItems->isEmpty()) {
+                throw new \Exception('Your cart is empty!');
             }
-        }
 
-        // Kapıda ödeme ise direkt sipariş oluştur
-        if ($request->payment_method === 'cash_on_delivery') {
-            DB::beginTransaction();
-            $order = $this->createOrder($request);
-            $this->createOrderItems($order, $cartItems);
-            $this->createPayment($order, $request);
-            if ($request->boolean('save_address') && !$request->shipping_address_id) {
-                $this->saveAddress($request);
-            }
-            CartItem::where('user_id', Auth::id())->delete();
-            DB::commit();
-            return redirect()->route('myorders')->with('success', 'Your order has been placed successfully!');
-        }
-
-        // Kredi kartı ise Stripe'a yönlendir
-        if ($request->payment_method === 'credit_card') {
-            // Form verilerini session'a kaydet
-            session(['checkout_request' => $request->all()]);
-
-            \Stripe\Stripe::setApiKey(config('services.stripe.secret'));
-
-            $subtotal = $cartItems->sum(function($item) {
-                $price = $item->urunVariant->discount_price ?? $item->urunVariant->price;
-                return $price * $item->quantity;
-            });
-
-            $discountAmount = session('discount_amount', 0);
-            $taxAmount = ($subtotal - $discountAmount) * 0.18;
-            $total = $subtotal - $discountAmount + $taxAmount;
-
-            // Stripe TRY desteklemiyor, USD'ye çeviriyoruz (test için)
-            $totalInCents = round($total * 100); // kuruş cinsinden
-
-            $lineItems = [];
+            // Stok ön kontrolü — kullanılabilir stok = stock - stock_reserved
             foreach ($cartItems as $item) {
-                $variant = $item->urunVariant;
-                $price = $variant->discount_price ?? $variant->price;
+                $variant        = UrunVariant::find($item->urunVariant->id);
+                $availableStock = $variant->stock - $variant->stock_reserved;
+                if ($availableStock < $item->quantity) {
+                    throw new \Exception("Insufficient stock for {$variant->urun->name}");
+                }
+            }
+
+            // ── Kapıda ödeme ──────────────────────────────
+            if ($request->payment_method === 'cash_on_delivery') {
+                DB::beginTransaction();
+                $order = $this->createOrder($request, $cartItems);
+                $this->createOrderItems($order, $cartItems);
+                $this->createPayment($order, $request);
+                if ($request->boolean('save_address') && !$request->shipping_address_id) {
+                    $this->saveAddress($request);
+                }
+                CartItem::where('user_id', Auth::id())->delete();
+                session()->forget(['discount_amount', 'discount_code']);
+                DB::commit();
+
+                return redirect()->route('myorders')->with('success', 'Your order has been placed successfully!');
+            }
+
+            // ── Kredi kartı → Stripe ──────────────────────
+            if ($request->payment_method === 'credit_card') {
+                \Stripe\Stripe::setApiKey(config('services.stripe.secret'));
+
+                $totals = $this->calculateTotals($cartItems);
+
+                // ✅ Stripe'a gitmeden önce stoku REZERVE ET
+                // Böylece başka kullanıcı aynı ürünü alamaz
+                foreach ($cartItems as $item) {
+                    $reserved = UrunVariant::where('id', $item->urunVariant->id)
+                        ->whereRaw('(stock - stock_reserved) >= ?', [$item->quantity])
+                        ->increment('stock_reserved', $item->quantity);
+
+                    if ($reserved === 0) {
+                        // Bu noktaya kadar rezerve edilenleri geri al
+                        $this->releaseReservations($cartItems, $item->urunVariant->id);
+                        throw new \Exception("Insufficient stock for {$item->urunVariant->urun->name}. Please try again.");
+                    }
+                }
+
+                // Sepeti SNAPSHOT olarak kaydet — Stripe'tan dönünce aynı ürünler işlensin
+                $cartSnapshot = $cartItems->map(fn($i) => [
+                    'variant_id' => $i->urunVariant->id,
+                    'quantity'   => $i->quantity,
+                ])->toArray();
+
+                // Session key'e user_id + random ekle → iki sekme çakışmaz
+                $sessionKey = 'checkout_' . Auth::id() . '_' . Str::random(8);
+
+                session([
+                    $sessionKey => [
+                        'form'     => $request->all(),
+                        'snapshot' => $cartSnapshot,
+                    ]
+                ]);
+
+                $lineItems = [];
+                foreach ($cartItems as $item) {
+                    $variant     = $item->urunVariant;
+                    $price       = $variant->discount_price ?? $variant->price;
+                    $lineItems[] = [
+                        'price_data' => [
+                            'currency'     => 'try',
+                            'product_data' => [
+                                'name' => $variant->urun->name . ' (' . $variant->color . ($variant->size ? ' / ' . $variant->size : '') . ')',
+                            ],
+                            'unit_amount'  => round($price * 100),
+                        ],
+                        'quantity' => $item->quantity,
+                    ];
+                }
+
+                // KDV satırı
                 $lineItems[] = [
                     'price_data' => [
-                        'currency' => 'try',
-                        'product_data' => [
-                            'name' => $variant->urun->name . ' (' . $variant->color . ($variant->size ? ' / ' . $variant->size : '') . ')',
-                        ],
-                        'unit_amount' => round($price * 100),
+                        'currency'     => 'try',
+                        'product_data' => ['name' => 'VAT (18%)'],
+                        'unit_amount'  => round($totals['taxAmount'] * 100),
                     ],
-                    'quantity' => $item->quantity,
+                    'quantity' => 1,
                 ];
+
+                $stripeSession = \Stripe\Checkout\Session::create([
+                    'payment_method_types' => ['card'],
+                    'line_items'           => $lineItems,
+                    'mode'                 => 'payment',
+                    'success_url'          => route('checkout.success') . '?session_id={CHECKOUT_SESSION_ID}&ck=' . $sessionKey,
+                    'cancel_url'           => route('checkout.cancel') . '?ck=' . $sessionKey,
+                    'customer_email'       => Auth::user()->email,
+                    'metadata'             => [
+                        'user_id'     => Auth::id(),
+                        'session_key' => $sessionKey,
+                    ],
+                    'expires_at' => time() + (30 * 60), // 30 dk sonra otomatik iptal
+                ]);
+
+                return redirect($stripeSession->url);
             }
 
-            // KDV satırı ekle
-            $lineItems[] = [
-                'price_data' => [
-                    'currency' => 'try',
-                    'product_data' => [
-                        'name' => 'VAT (18%)',
-                    ],
-                    'unit_amount' => round($taxAmount * 100),
-                ],
-                'quantity' => 1,
-            ];
+        } catch (\Exception $e) {
+            DB::rollBack();
+            Log::error('Checkout error: ' . $e->getMessage());
+            return back()->with('error', $e->getMessage())->withInput();
+        }
+    }
 
-            $session = \Stripe\Checkout\Session::create([
-                'payment_method_types' => ['card'],
-                'line_items' => $lineItems,
-                'mode' => 'payment',
-                'success_url' => route('checkout.success') . '?session_id={CHECKOUT_SESSION_ID}',
-                'cancel_url' => route('checkout.cancel'),
-                'customer_email' => Auth::user()->email,
+    // ─────────────────────────────────────────────
+    // Stripe başarılı dönüş
+    // ─────────────────────────────────────────────
+    public function success(Request $request)
+    {
+        try {
+            \Stripe\Stripe::setApiKey(config('services.stripe.secret'));
+
+            $stripeSession = \Stripe\Checkout\Session::retrieve($request->session_id);
+
+            if ($stripeSession->payment_status !== 'paid') {
+                return redirect()->route('checkout.index')->with('error', 'Payment could not be verified.');
+            }
+
+            // Daha önce işlendiyse direkt yönlendir (idempotency)
+            $existingPayment = Payment::where('transaction_id', $stripeSession->payment_intent)->first();
+            if ($existingPayment) {
+                return redirect()->route('myorders')->with('success', 'Your payment was successful!');
+            }
+
+            $sessionKey   = $request->ck;
+            $checkoutData = session($sessionKey);
+
+            if (!$checkoutData) {
+                return redirect()->route('myorders')->with('info', 'Your order is being processed.');
+            }
+
+            $fakeRequest  = new Request($checkoutData['form']);
+            $cartSnapshot = $checkoutData['snapshot'];
+
+            // Snapshot'tan variant'ları yükle
+            $snapshotItems = collect($cartSnapshot)->map(function ($snap) {
+                $variant          = UrunVariant::with('urun')->findOrFail($snap['variant_id']);
+                $obj              = new \stdClass();
+                $obj->urunVariant = $variant;
+                $obj->quantity    = $snap['quantity'];
+                return $obj;
+            });
+
+            DB::beginTransaction();
+
+            $order = $this->createOrder($fakeRequest, $snapshotItems);
+
+            // ✅ Stok düşür + rezervasyonu serbest bırak
+            $this->createOrderItemsFromReservation($order, $snapshotItems);
+
+            Payment::create([
+                'order_id'       => $order->id,
+                'payment_method' => 'credit_card',
+                'transaction_id' => $stripeSession->payment_intent,
+                'amount'         => $order->total,
+                'currency'       => 'TRY',
+                'status'         => 'success',
+                'response_data'  => json_encode($stripeSession->toArray()),
+                'completed_at'   => now(),
             ]);
 
-            return redirect($session->url);
-        }
+            if ($fakeRequest->boolean('save_address') && !$fakeRequest->shipping_address_id) {
+                $this->saveAddress($fakeRequest);
+            }
 
-    } catch (\Exception $e) {
-        DB::rollBack();
-        Log::error('Checkout error: ' . $e->getMessage());
-        return back()->with('error', $e->getMessage())->withInput();
+            CartItem::where('user_id', Auth::id())->delete();
+            session()->forget([$sessionKey, 'discount_amount', 'discount_code']);
+
+            DB::commit();
+
+            return redirect()->route('myorders')->with('success', 'Your payment was successful!');
+
+        } catch (\Exception $e) {
+            DB::rollBack();
+            Log::error('Stripe success error: ' . $e->getMessage());
+            return redirect()->route('checkout.index')->with('error', 'An error occurred: ' . $e->getMessage());
+        }
     }
-}
-public function success(Request $request)
-{
-    try {
-        \Stripe\Stripe::setApiKey(config('services.stripe.secret'));
-        
-        $session = \Stripe\Checkout\Session::retrieve($request->session_id);
-        
-        if ($session->payment_status !== 'paid') {
-            return redirect()->route('checkout.index')->with('error', 'Payment could not be verified.');
+
+    // ─────────────────────────────────────────────
+    // Stripe iptal — rezervasyonu serbest bırak
+    // ─────────────────────────────────────────────
+    public function cancel(Request $request)
+    {
+        $sessionKey   = $request->ck;
+        $checkoutData = session($sessionKey);
+
+        if ($checkoutData && isset($checkoutData['snapshot'])) {
+            foreach ($checkoutData['snapshot'] as $snap) {
+                UrunVariant::where('id', $snap['variant_id'])
+                    ->where('stock_reserved', '>=', $snap['quantity'])
+                    ->decrement('stock_reserved', $snap['quantity']);
+            }
+            session()->forget($sessionKey);
         }
 
-        $checkoutData = session('checkout_request');
-        if (!$checkoutData) {
-            return redirect()->route('checkout.index')->with('error', 'Session expired. Please try again.');
-        }
-
-        $fakeRequest = new Request($checkoutData);
-        $cartItems = $this->getCartItems();
-
-        DB::beginTransaction();
-        $order = $this->createOrder($fakeRequest);
-        $this->createOrderItems($order, $cartItems);
-        
-        Payment::create([
-            'order_id'       => $order->id,
-            'payment_method' => 'credit_card',
-            'transaction_id' => $session->payment_intent,
-            'amount'         => $order->total,
-            'currency'       => 'TRY',
-            'status'         => 'success',
-            'response_data'  => json_encode($session->toArray()),
-            'completed_at'   => now(),
-        ]);
-
-        if ($fakeRequest->boolean('save_address') && !$fakeRequest->shipping_address_id) {
-            $this->saveAddress($fakeRequest);
-        }
-
-        CartItem::where('user_id', Auth::id())->delete();
-        session()->forget('checkout_request');
-
-        DB::commit();
-
-        return redirect()->route('myorders');
-
-    } catch (\Exception $e) {
-        DB::rollBack();
-        Log::error('Stripe success error: ' . $e->getMessage());
-        return redirect()->route('checkout.index')->with('error', 'An error occurred: ' . $e->getMessage());
+        return redirect()->route('checkout.index')->with('error', 'Payment cancelled. Please try again.');
     }
-}
 
-public function cancel()
-{
-    return redirect()->route('checkout.index')->with('error', 'Payment cancelled. Please try again.');
-}
+    // ─────────────────────────────────────────────
+    // Stripe Webhook
+    // ─────────────────────────────────────────────
+    public function webhook(Request $request)
+    {
+        $payload   = $request->getContent();
+        $sigHeader = $request->header('Stripe-Signature');
+        $secret    = config('services.stripe.webhook_secret');
+
+        try {
+            $event = \Stripe\Webhook::constructEvent($payload, $sigHeader, $secret);
+        } catch (\Exception $e) {
+            Log::error('Stripe webhook imza hatası: ' . $e->getMessage());
+            return response('Invalid signature', 400);
+        }
+
+        // Ödeme tamamlandı
+        if ($event->type === 'checkout.session.completed') {
+            $stripeSession = $event->data->object;
+
+            if (Payment::where('transaction_id', $stripeSession->payment_intent)->exists()) {
+                return response('Already processed', 200);
+            }
+
+            $userId = $stripeSession->metadata->user_id ?? null;
+
+            if (!$userId) {
+                Log::error('Stripe webhook: user_id metadata eksik');
+                return response('Missing metadata', 400);
+            }
+
+            try {
+                DB::beginTransaction();
+
+                $order = Order::where('user_id', $userId)
+                    ->whereDoesntHave('payment', fn($q) => $q->where('status', 'success'))
+                    ->latest()
+                    ->first();
+
+                if ($order) {
+                    Payment::updateOrCreate(
+                        ['transaction_id' => $stripeSession->payment_intent],
+                        [
+                            'order_id'       => $order->id,
+                            'payment_method' => 'credit_card',
+                            'amount'         => $order->total,
+                            'currency'       => 'TRY',
+                            'status'         => 'success',
+                            'response_data'  => json_encode((array) $stripeSession),
+                            'completed_at'   => now(),
+                        ]
+                    );
+
+                    $order->update([
+                        'payment_status' => 'paid',
+                        'paid_at'        => now(),
+                    ]);
+                }
+
+                DB::commit();
+            } catch (\Exception $e) {
+                DB::rollBack();
+                Log::error('Stripe webhook order update hatası: ' . $e->getMessage());
+                return response('Error', 500);
+            }
+        }
+
+        // ✅ Stripe session süresi doldu → rezervasyonu serbest bırak
+        if ($event->type === 'checkout.session.expired') {
+            $stripeSession = $event->data->object;
+            $sessionKey    = $stripeSession->metadata->session_key ?? null;
+
+            Log::info('Stripe session expired, rezervasyon temizleniyor', ['session_key' => $sessionKey]);
+
+            // Snapshot session'da, webhook'ta erişilemez.
+            // Bu yüzden ClearExpiredReservations command'ı ile periyodik temizlik önerilir.
+            // php artisan reservations:clear
+        }
+
+        return response('OK', 200);
+    }
+
+    // ─────────────────────────────────────────────
+    // Adres sil
+    // ─────────────────────────────────────────────
     public function deleteAddress(Address $address)
     {
         if ($address->user_id !== Auth::id()) {
@@ -214,98 +375,151 @@ public function cancel()
         }
     }
 
-    private function createOrder($request)
+    // ─────────────────────────────────────────────
+    // PRIVATE: Sipariş oluştur
+    // ─────────────────────────────────────────────
+    private function createOrder($request, $cartItems)
     {
-        $cartItems = $this->getCartItems();
-        $subtotal = $cartItems->sum(function($item) {
-            $price = $item->urunVariant->discount_price ?? $item->urunVariant->price;
-            return $price * $item->quantity;
-        });
-
-        // Shipping her zaman ücretsiz
-        $shippingCost = 0;
-        $discountAmount = session('discount_amount', 0);
-        $taxAmount = ($subtotal - $discountAmount) * 0.18;
-        $total = $subtotal - $discountAmount + $taxAmount; // shippingCost çıkarıldı
+        $totals = $this->calculateTotals(collect($cartItems));
 
         if ($request->shipping_address_id) {
-            $address = Address::findOrFail($request->shipping_address_id);
+            $address      = Address::findOrFail($request->shipping_address_id);
             $shippingData = [
                 'shipping_full_name' => $address->full_name,
-                'shipping_phone' => $address->phone,
-                'shipping_address' => $address->address,
-                'shipping_city' => $address->city,
-                'shipping_district' => $address->district,
-                'shipping_zip' => $address->zip_code,
+                'shipping_phone'     => $address->phone,
+                'shipping_address'   => $address->address,
+                'shipping_city'      => $address->city,
+                'shipping_district'  => $address->district,
+                'shipping_zip'       => $address->zip_code,
             ];
         } else {
             $shippingData = [
                 'shipping_full_name' => $request->shipping_full_name,
-                'shipping_phone' => $request->shipping_phone,
-                'shipping_address' => $request->shipping_address,
-                'shipping_city' => $request->shipping_city,
-                'shipping_district' => $request->shipping_district,
-                'shipping_zip' => $request->shipping_zip,
+                'shipping_phone'     => $request->shipping_phone,
+                'shipping_address'   => $request->shipping_address,
+                'shipping_city'      => $request->shipping_city,
+                'shipping_district'  => $request->shipping_district,
+                'shipping_zip'       => $request->shipping_zip,
             ];
         }
 
-        $isPaid = in_array($request->payment_method, ['wallet', 'credit_card']);
+        $isPaid      = in_array($request->payment_method, ['wallet', 'credit_card']);
+        $orderNumber = 'ORD-' . date('Ymd') . '-' . strtoupper(substr(str_replace('-', '', Str::uuid()), 0, 8));
 
         return Order::create([
-            'order_number' => 'ORD-' . date('Ymd') . '-' . strtoupper(substr(uniqid(), -6)),
-            'user_id' => Auth::id(),
+            'order_number'    => $orderNumber,
+            'user_id'         => Auth::id(),
             ...$shippingData,
-            'payment_method' => $request->payment_method,
-            'payment_status' => $isPaid ? 'paid' : 'pending',
-            'subtotal' => $subtotal,
-            'shipping_cost' => $shippingCost,
-            'discount_amount' => $discountAmount,
-            'tax_amount' => $taxAmount,
-            'total' => $total,
-            'customer_note' => $request->customer_note,
-            'status' => 'pending',
-            'paid_at' => $isPaid ? now() : null,
+            'payment_method'  => $request->payment_method,
+            'payment_status'  => $isPaid ? 'paid' : 'pending',
+            'subtotal'        => $totals['subtotal'],
+            'shipping_cost'   => $totals['shippingCost'],
+            'discount_amount' => $totals['discountAmount'],
+            'tax_amount'      => $totals['taxAmount'],
+            'total'           => $totals['total'],
+            'customer_note'   => $request->customer_note,
+            'status'          => 'pending',
+            'paid_at'         => $isPaid ? now() : null,
         ]);
     }
 
-   private function createOrderItems($order, $cartItems)
-{
-    foreach ($cartItems as $item) {
-        $variant = $item->urunVariant;
-        $urun = $variant->urun;
-        $price = $variant->discount_price ?? $variant->price;
+    // ─────────────────────────────────────────────
+    // PRIVATE: Kapıda ödeme — atomic stok düşürme
+    // ─────────────────────────────────────────────
+    private function createOrderItems($order, $cartItems)
+    {
+        foreach ($cartItems as $item) {
+            $variant = $item->urunVariant;
+            $urun    = $variant->urun;
+            $price   = $variant->discount_price ?? $variant->price;
 
-        // ✅ ATOMIC STOK DÜŞÜRME - Race condition'ı önler
-        // Tek sorguda: "Stok yeterli mi?" kontrolü + "Stok düşür" işlemi
-        $affected = UrunVariant::where('id', $variant->id)
-            ->where('stock', '>=', $item->quantity)  // Stok yeterli mi kontrol et
-            ->decrement('stock', $item->quantity);  // Hemen düşür (atomic)
+            // Kullanılabilir stok (rezerve edilmemiş) yeterliyse düş
+            $affected = UrunVariant::where('id', $variant->id)
+                ->whereRaw('(stock - stock_reserved) >= ?', [$item->quantity])
+                ->decrement('stock', $item->quantity);
 
-        // Eğer 0 satır etkilendiyse, stok yetersiz demektir
-        if ($affected === 0) {
-            throw new \Exception("Yetersiz stok: {$urun->name}. Ürün başka biri tarafından son anda satın alındı, lütfen sepetinizi güncelleyin.");
+            if ($affected === 0) {
+                throw new \Exception("Yetersiz stok: {$urun->name}. Lütfen sepetinizi güncelleyin.");
+            }
+
+            OrderItem::create([
+                'order_id'            => $order->id,
+                'urun_id'             => $urun->id,
+                'urun_variant_id'     => $variant->id,
+                'product_name'        => $urun->name,
+                'variant_name'        => $variant->color . ($variant->size ? ' / ' . $variant->size : ''),
+                'sku'                 => $variant->sku,
+                'unit_price'          => $variant->price,
+                'unit_discount_price' => $variant->discount_price,
+                'quantity'            => $item->quantity,
+                'subtotal'            => $price * $item->quantity,
+                'total'               => $price * $item->quantity,
+            ]);
         }
-
-   OrderItem::create([
-    'order_id'            => $order->id,
-    'urun_id'             => $urun->id,
-    'urun_variant_id'     => $variant->id,
-    'product_name'        => $urun->name,
-    'variant_name'        => $variant->color . ($variant->size ? ' / ' . $variant->size : ''),
-    'sku'                 => $variant->sku,
-    'unit_price'          => $variant->discount_price ?? $variant->price,  // ← düzeltme
-    'unit_discount_price' => $variant->discount_price,
-    'quantity'            => $item->quantity,
-    'subtotal'            => $price * $item->quantity,
-    'total'               => $price * $item->quantity,
-]);
     }
-}
 
+    // ─────────────────────────────────────────────
+    // PRIVATE: Stripe ödemesi — stok düşür + rezervasyonu kaldır
+    // ─────────────────────────────────────────────
+    private function createOrderItemsFromReservation($order, $snapshotItems)
+    {
+        foreach ($snapshotItems as $item) {
+            $variant = $item->urunVariant;
+            $urun    = $variant->urun;
+            $price   = $variant->discount_price ?? $variant->price;
+
+            // Gerçek stok düşürme
+            $affected = UrunVariant::where('id', $variant->id)
+                ->where('stock', '>=', $item->quantity)
+                ->decrement('stock', $item->quantity);
+
+            if ($affected === 0) {
+                throw new \Exception("Stok hatası: {$urun->name}.");
+            }
+
+            // Rezervasyonu kaldır
+            UrunVariant::where('id', $variant->id)
+                ->where('stock_reserved', '>=', $item->quantity)
+                ->decrement('stock_reserved', $item->quantity);
+
+            OrderItem::create([
+                'order_id'            => $order->id,
+                'urun_id'             => $urun->id,
+                'urun_variant_id'     => $variant->id,
+                'product_name'        => $urun->name,
+                'variant_name'        => $variant->color . ($variant->size ? ' / ' . $variant->size : ''),
+                'sku'                 => $variant->sku,
+                'unit_price'          => $variant->price,
+                'unit_discount_price' => $variant->discount_price,
+                'quantity'            => $item->quantity,
+                'subtotal'            => $price * $item->quantity,
+                'total'               => $price * $item->quantity,
+            ]);
+        }
+    }
+
+    // ─────────────────────────────────────────────
+    // PRIVATE: Kısmi rezervasyonu geri al
+    // ─────────────────────────────────────────────
+    private function releaseReservations($cartItems, $stopAtVariantId = null)
+    {
+        foreach ($cartItems as $item) {
+            if ($stopAtVariantId && $item->urunVariant->id === $stopAtVariantId) {
+                break;
+            }
+            UrunVariant::where('id', $item->urunVariant->id)
+                ->where('stock_reserved', '>=', $item->quantity)
+                ->decrement('stock_reserved', $item->quantity);
+        }
+    }
+
+    // ─────────────────────────────────────────────
+    // PRIVATE: Ödeme kaydı
+    // ─────────────────────────────────────────────
     private function createPayment($order, $request)
     {
         $status = 'pending';
-        
+
         if ($request->payment_method === 'wallet') {
             $user = Auth::user();
             if ($user->wallet_balance >= $order->total) {
@@ -317,29 +531,35 @@ public function cancel()
         }
 
         Payment::create([
-            'order_id' => $order->id,
+            'order_id'       => $order->id,
             'payment_method' => $request->payment_method,
-            'amount' => $order->total,
-            'currency' => 'TRY',
-            'status' => $status,
+            'amount'         => $order->total,
+            'currency'       => 'TRY',
+            'status'         => $status,
         ]);
     }
 
+    // ─────────────────────────────────────────────
+    // PRIVATE: Adres kaydet
+    // ─────────────────────────────────────────────
     private function saveAddress($request)
     {
         Address::create([
-            'user_id' => Auth::id(),
-            'title' => 'New Address',
-            'full_name' => $request->shipping_full_name,
-            'phone' => $request->shipping_phone,
-            'address' => $request->shipping_address,
-            'city' => $request->shipping_city,
-            'district' => $request->shipping_district,
-            'zip_code' => $request->shipping_zip,
+            'user_id'    => Auth::id(),
+            'title'      => 'New Address',
+            'full_name'  => $request->shipping_full_name,
+            'phone'      => $request->shipping_phone,
+            'address'    => $request->shipping_address,
+            'city'       => $request->shipping_city,
+            'district'   => $request->shipping_district,
+            'zip_code'   => $request->shipping_zip,
             'is_default' => Address::where('user_id', Auth::id())->count() === 0,
         ]);
     }
 
+    // ─────────────────────────────────────────────
+    // PRIVATE: Sepet öğelerini getir
+    // ─────────────────────────────────────────────
     private function getCartItems()
     {
         return CartItem::with(['urunVariant.urun', 'urunVariant.images'])
