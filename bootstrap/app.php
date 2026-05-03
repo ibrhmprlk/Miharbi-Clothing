@@ -11,11 +11,17 @@ return Application::configure(basePath: dirname(__DIR__))
         commands: __DIR__.'/../routes/console.php',
         health: '/up',
     )
-    ->withMiddleware(function (Middleware $middleware): void {
-        $middleware->alias([
-            'nocache' => \App\Http\Middleware\NoCacheMiddleware::class,
-        ]);
-    })
+->withMiddleware(function (Middleware $middleware): void {
+    $middleware->alias([
+        'nocache' => \App\Http\Middleware\NoCacheMiddleware::class,
+    ]);
+
+    // ✅ Stripe webhook CSRF'den hariç tut
+    $middleware->validateCsrfTokens(except: [
+        'stripe/webhook',
+        'payment/callback', // PayTR için de ekle
+    ]);
+})
     ->withExceptions(function (Exceptions $exceptions): void {
         $exceptions->render(function (TokenMismatchException $e, $request) {
             return redirect('/');
