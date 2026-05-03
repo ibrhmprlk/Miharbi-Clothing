@@ -45,10 +45,10 @@ Route::post('/contact', [ContactController::class, 'sendMail'])->name('contact.s
 // PayTR webhook
 Route::post('/payment/callback', [PaymentGatewayController::class, 'callback'])->name('payment.callback');
 
-// ✅ Stripe webhook — CSRF hariç tutulmalı (VerifyCsrfToken middleware'de de ekle)
+// ✅ Stripe webhook — Laravel 11 uyumlu CSRF hariç tutma
 Route::post('/stripe/webhook', [CheckoutController::class, 'webhook'])
     ->name('stripe.webhook')
-    ->withoutMiddleware([\App\Http\Middleware\VerifyCsrfToken::class]);
+    ->withoutMiddleware([\Illuminate\Foundation\Http\Middleware\VerifyCsrfToken::class]);
 
 // ==================== ADMIN ROUTES ====================
 Route::prefix('admin')->name('admin.')->group(function () {
