@@ -16,9 +16,6 @@ use Illuminate\Support\Str;
 
 class CheckoutController extends Controller
 {
-    // ─────────────────────────────────────────────
-    // Ortak fiyat hesaplama — TEK yer, tutarsızlık yok
-    // ─────────────────────────────────────────────
     private function calculateTotals($cartItems): array
     {
         $subtotal       = collect($cartItems)->sum(fn($i) => ($i->urunVariant->discount_price ?? $i->urunVariant->price) * $i->quantity);
@@ -30,9 +27,6 @@ class CheckoutController extends Controller
         return compact('subtotal', 'shippingCost', 'discountAmount', 'taxAmount', 'total');
     }
 
-    // ─────────────────────────────────────────────
-    // Checkout sayfası
-    // ─────────────────────────────────────────────
     public function index()
     {
         $cartItems = $this->getCartItems();
@@ -58,9 +52,6 @@ class CheckoutController extends Controller
         ));
     }
 
-    // ─────────────────────────────────────────────
-    // Ödeme işlemi başlat
-    // ─────────────────────────────────────────────
     public function process(Request $request)
     {
         try {
@@ -70,7 +61,6 @@ class CheckoutController extends Controller
                 throw new \Exception('Your cart is empty!');
             }
 
-            // Stok ön kontrolü — kullanılabilir stok = stock - stock_reserved
             foreach ($cartItems as $item) {
                 $variant        = UrunVariant::find($item->urunVariant->id);
                 $availableStock = $variant->stock - $variant->stock_reserved;
@@ -101,27 +91,23 @@ class CheckoutController extends Controller
 
                 $totals = $this->calculateTotals($cartItems);
 
-                // ✅ Stripe'a gitmeden önce stoku REZERVE ET
-                // Böylece başka kullanıcı aynı ürünü alamaz
+                // Stripe'a gitmeden önce stoku rezerve et
                 foreach ($cartItems as $item) {
                     $reserved = UrunVariant::where('id', $item->urunVariant->id)
                         ->whereRaw('(stock - stock_reserved) >= ?', [$item->quantity])
                         ->increment('stock_reserved', $item->quantity);
 
                     if ($reserved === 0) {
-                        // Bu noktaya kadar rezerve edilenleri geri al
                         $this->releaseReservations($cartItems, $item->urunVariant->id);
                         throw new \Exception("Insufficient stock for {$item->urunVariant->urun->name}. Please try again.");
                     }
                 }
 
-                // Sepeti SNAPSHOT olarak kaydet — Stripe'tan dönünce aynı ürünler işlensin
                 $cartSnapshot = $cartItems->map(fn($i) => [
                     'variant_id' => $i->urunVariant->id,
                     'quantity'   => $i->quantity,
                 ])->toArray();
 
-                // Session key'e user_id + random ekle → iki sekme çakışmaz
                 $sessionKey = 'checkout_' . Auth::id() . '_' . Str::random(8);
 
                 session([
@@ -147,7 +133,6 @@ class CheckoutController extends Controller
                     ];
                 }
 
-                // KDV satırı
                 $lineItems[] = [
                     'price_data' => [
                         'currency'     => 'try',
@@ -165,10 +150,12 @@ class CheckoutController extends Controller
                     'cancel_url'           => route('checkout.cancel') . '?ck=' . $sessionKey,
                     'customer_email'       => Auth::user()->email,
                     'metadata'             => [
-                        'user_id'     => Auth::id(),
-                        'session_key' => $sessionKey,
+                        'user_id'      => Auth::id(),
+                        'session_key'  => $sessionKey,
+                        // ✅ Snapshot metadata'ya gömüldü — webhook'ta session'a gerek yok
+                        'cart_snapshot' => json_encode($cartSnapshot),
                     ],
-                    'expires_at' => time() + (30 * 60), // 30 dk sonra otomatik iptal
+                    'expires_at' => time() + (30 * 60),
                 ]);
 
                 return redirect($stripeSession->url);
@@ -181,9 +168,6 @@ class CheckoutController extends Controller
         }
     }
 
-    // ─────────────────────────────────────────────
-    // Stripe başarılı dönüş
-    // ─────────────────────────────────────────────
     public function success(Request $request)
     {
         try {
@@ -195,7 +179,6 @@ class CheckoutController extends Controller
                 return redirect()->route('checkout.index')->with('error', 'Payment could not be verified.');
             }
 
-            // Daha önce işlendiyse direkt yönlendir (idempotency)
             $existingPayment = Payment::where('transaction_id', $stripeSession->payment_intent)->first();
             if ($existingPayment) {
                 return redirect()->route('myorders')->with('success', 'Your payment was successful!');
@@ -211,7 +194,6 @@ class CheckoutController extends Controller
             $fakeRequest  = new Request($checkoutData['form']);
             $cartSnapshot = $checkoutData['snapshot'];
 
-            // Snapshot'tan variant'ları yükle
             $snapshotItems = collect($cartSnapshot)->map(function ($snap) {
                 $variant          = UrunVariant::with('urun')->findOrFail($snap['variant_id']);
                 $obj              = new \stdClass();
@@ -223,9 +205,10 @@ class CheckoutController extends Controller
             DB::beginTransaction();
 
             $order = $this->createOrder($fakeRequest, $snapshotItems);
-
-            // ✅ Stok düşür + rezervasyonu serbest bırak
             $this->createOrderItemsFromReservation($order, $snapshotItems);
+
+            // ✅ metadata'dan user_id al — session'dan Auth::id() yerine güvenli
+            $userId = $stripeSession->metadata->user_id ?? Auth::id();
 
             Payment::create([
                 'order_id'       => $order->id,
@@ -242,7 +225,7 @@ class CheckoutController extends Controller
                 $this->saveAddress($fakeRequest);
             }
 
-            CartItem::where('user_id', Auth::id())->delete();
+            CartItem::where('user_id', $userId)->delete();
             session()->forget([$sessionKey, 'discount_amount', 'discount_code']);
 
             DB::commit();
@@ -256,9 +239,6 @@ class CheckoutController extends Controller
         }
     }
 
-    // ─────────────────────────────────────────────
-    // Stripe iptal — rezervasyonu serbest bırak
-    // ─────────────────────────────────────────────
     public function cancel(Request $request)
     {
         $sessionKey   = $request->ck;
@@ -276,9 +256,6 @@ class CheckoutController extends Controller
         return redirect()->route('checkout.index')->with('error', 'Payment cancelled. Please try again.');
     }
 
-    // ─────────────────────────────────────────────
-    // Stripe Webhook
-    // ─────────────────────────────────────────────
     public function webhook(Request $request)
     {
         $payload   = $request->getContent();
@@ -343,24 +320,35 @@ class CheckoutController extends Controller
             }
         }
 
-        // ✅ Stripe session süresi doldu → rezervasyonu serbest bırak
+        // ✅ Stripe session süresi doldu → metadata'daki snapshot ile rezervasyonu serbest bırak
         if ($event->type === 'checkout.session.expired') {
             $stripeSession = $event->data->object;
             $sessionKey    = $stripeSession->metadata->session_key ?? null;
+            $snapshotJson  = $stripeSession->metadata->cart_snapshot ?? null;
 
             Log::info('Stripe session expired, rezervasyon temizleniyor', ['session_key' => $sessionKey]);
 
-            // Snapshot session'da, webhook'ta erişilemez.
-            // Bu yüzden ClearExpiredReservations command'ı ile periyodik temizlik önerilir.
-            // php artisan reservations:clear
+            if ($snapshotJson) {
+                $snapshot = json_decode($snapshotJson, true);
+
+                if (is_array($snapshot)) {
+                    foreach ($snapshot as $snap) {
+                        UrunVariant::where('id', $snap['variant_id'])
+                            ->where('stock_reserved', '>=', $snap['quantity'])
+                            ->decrement('stock_reserved', $snap['quantity']);
+                    }
+
+                    Log::info('Stripe expired: rezervasyonlar serbest bırakıldı', [
+                        'session_key' => $sessionKey,
+                        'items'       => count($snapshot),
+                    ]);
+                }
+            }
         }
 
         return response('OK', 200);
     }
 
-    // ─────────────────────────────────────────────
-    // Adres sil
-    // ─────────────────────────────────────────────
     public function deleteAddress(Address $address)
     {
         if ($address->user_id !== Auth::id()) {
@@ -375,9 +363,6 @@ class CheckoutController extends Controller
         }
     }
 
-    // ─────────────────────────────────────────────
-    // PRIVATE: Sipariş oluştur
-    // ─────────────────────────────────────────────
     private function createOrder($request, $cartItems)
     {
         $totals = $this->calculateTotals(collect($cartItems));
@@ -423,9 +408,6 @@ class CheckoutController extends Controller
         ]);
     }
 
-    // ─────────────────────────────────────────────
-    // PRIVATE: Kapıda ödeme — atomic stok düşürme
-    // ─────────────────────────────────────────────
     private function createOrderItems($order, $cartItems)
     {
         foreach ($cartItems as $item) {
@@ -433,7 +415,6 @@ class CheckoutController extends Controller
             $urun    = $variant->urun;
             $price   = $variant->discount_price ?? $variant->price;
 
-            // Kullanılabilir stok (rezerve edilmemiş) yeterliyse düş
             $affected = UrunVariant::where('id', $variant->id)
                 ->whereRaw('(stock - stock_reserved) >= ?', [$item->quantity])
                 ->decrement('stock', $item->quantity);
@@ -458,9 +439,6 @@ class CheckoutController extends Controller
         }
     }
 
-    // ─────────────────────────────────────────────
-    // PRIVATE: Stripe ödemesi — stok düşür + rezervasyonu kaldır
-    // ─────────────────────────────────────────────
     private function createOrderItemsFromReservation($order, $snapshotItems)
     {
         foreach ($snapshotItems as $item) {
@@ -468,7 +446,6 @@ class CheckoutController extends Controller
             $urun    = $variant->urun;
             $price   = $variant->discount_price ?? $variant->price;
 
-            // Gerçek stok düşürme
             $affected = UrunVariant::where('id', $variant->id)
                 ->where('stock', '>=', $item->quantity)
                 ->decrement('stock', $item->quantity);
@@ -477,7 +454,6 @@ class CheckoutController extends Controller
                 throw new \Exception("Stok hatası: {$urun->name}.");
             }
 
-            // Rezervasyonu kaldır
             UrunVariant::where('id', $variant->id)
                 ->where('stock_reserved', '>=', $item->quantity)
                 ->decrement('stock_reserved', $item->quantity);
@@ -498,9 +474,6 @@ class CheckoutController extends Controller
         }
     }
 
-    // ─────────────────────────────────────────────
-    // PRIVATE: Kısmi rezervasyonu geri al
-    // ─────────────────────────────────────────────
     private function releaseReservations($cartItems, $stopAtVariantId = null)
     {
         foreach ($cartItems as $item) {
@@ -513,9 +486,6 @@ class CheckoutController extends Controller
         }
     }
 
-    // ─────────────────────────────────────────────
-    // PRIVATE: Ödeme kaydı
-    // ─────────────────────────────────────────────
     private function createPayment($order, $request)
     {
         $status = 'pending';
@@ -539,9 +509,6 @@ class CheckoutController extends Controller
         ]);
     }
 
-    // ─────────────────────────────────────────────
-    // PRIVATE: Adres kaydet
-    // ─────────────────────────────────────────────
     private function saveAddress($request)
     {
         Address::create([
@@ -557,9 +524,6 @@ class CheckoutController extends Controller
         ]);
     }
 
-    // ─────────────────────────────────────────────
-    // PRIVATE: Sepet öğelerini getir
-    // ─────────────────────────────────────────────
     private function getCartItems()
     {
         return CartItem::with(['urunVariant.urun', 'urunVariant.images'])
