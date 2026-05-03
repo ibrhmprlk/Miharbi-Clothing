@@ -12,7 +12,7 @@ use App\Http\Controllers\PaymentGatewayController;
 use App\Http\Controllers\OrderController;
 use App\Http\Controllers\Auth\AuthenticatedSessionController;
 
-// ==================== PUBLIC ROUTES (şifresiz) ====================
+// ==================== PUBLIC ROUTES ====================
 
 Route::get('/', [UrunController::class, 'index'])->name('welcome');
 
@@ -42,9 +42,15 @@ Route::put('/variant-all-update', [UrunController::class, 'variantUpdate'])->nam
 Route::get('/contact', function () { return view('dashboard'); })->name('contact.index');
 Route::post('/contact', [ContactController::class, 'sendMail'])->name('contact.send');
 
+// PayTR webhook
 Route::post('/payment/callback', [PaymentGatewayController::class, 'callback'])->name('payment.callback');
 
-// ==================== ADMIN ROUTES (şifresiz) ====================
+// ✅ Stripe webhook — CSRF hariç tutulmalı (VerifyCsrfToken middleware'de de ekle)
+Route::post('/stripe/webhook', [CheckoutController::class, 'webhook'])
+    ->name('stripe.webhook')
+    ->withoutMiddleware([\App\Http\Middleware\VerifyCsrfToken::class]);
+
+// ==================== ADMIN ROUTES ====================
 Route::prefix('admin')->name('admin.')->group(function () {
     Route::get('/orders', [OrderController::class, 'adminIndex'])->name('orders.index');
     Route::get('/orders/{order}', [OrderController::class, 'adminShow'])->name('orders.show');
@@ -57,7 +63,7 @@ Route::prefix('admin')->name('admin.')->group(function () {
     Route::post('/reviews/bulk', [OrderController::class, 'bulkReviewAction'])->name('reviews.bulk');
 });
 
-// ==================== AUTH ROUTES (şifreli) ====================
+// ==================== AUTH ROUTES ====================
 Route::middleware(['auth', 'nocache'])->group(function () {
 
     Route::get('/dashboard', [UrunController::class, 'dashboard'])
@@ -81,13 +87,12 @@ Route::middleware(['auth', 'nocache'])->group(function () {
     Route::delete('/address/{address}', [CheckoutController::class, 'deleteAddress'])->name('address.delete');
 
     // CHECKOUT
-// CHECKOUT
-Route::prefix('checkout')->name('checkout.')->group(function () {
-    Route::get('/', [CheckoutController::class, 'index'])->name('index');
-    Route::post('/process', [CheckoutController::class, 'process'])->name('process');
-    Route::get('/success', [CheckoutController::class, 'success'])->name('success');  // ← değişti
-    Route::get('/cancel', [CheckoutController::class, 'cancel'])->name('cancel');     // ← eklendi
-});
+    Route::prefix('checkout')->name('checkout.')->group(function () {
+        Route::get('/', [CheckoutController::class, 'index'])->name('index');
+        Route::post('/process', [CheckoutController::class, 'process'])->name('process');
+        Route::get('/success', [CheckoutController::class, 'success'])->name('success');
+        Route::get('/cancel', [CheckoutController::class, 'cancel'])->name('cancel');
+    });
 
     // MY ORDERS
     Route::get('/myorders', [OrderController::class, 'index'])->name('myorders');
