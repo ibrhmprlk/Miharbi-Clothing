@@ -56,7 +56,9 @@ Route::prefix('admin')->name('admin.')->group(function () {
     Route::get('/orders/{order}', [OrderController::class, 'adminShow'])->name('orders.show');
     Route::post('/orders/{order}/status', [OrderController::class, 'updateStatus'])->name('orders.status');
     Route::post('/orders/{order}/tracking', [OrderController::class, 'updateTracking'])->name('orders.tracking');
-
+    Route::delete('/orders/{order}', [OrderController::class, 'adminDestroy'])->name('orders.destroy');
+    // ✅ YENİ: Toplu silme
+    Route::post('/orders/bulk', [OrderController::class, 'bulkOrderAction'])->name('orders.bulk');
     Route::get('/reviews', [OrderController::class, 'reviewsIndex'])->name('reviews.index');
     Route::post('/reviews/{review}/approve', [OrderController::class, 'approveReview'])->name('reviews.approve');
     Route::delete('/reviews/{review}', [OrderController::class, 'destroyReview'])->name('reviews.destroy');
