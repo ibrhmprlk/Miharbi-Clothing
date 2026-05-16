@@ -6,7 +6,10 @@
 <div x-data="{ 
     selectedOrders: [],
     selectAll: false,
-    bulkAction: ''
+    bulkAction: '',
+    showDeleteModal: false,
+    deleteOrderId: null,
+    deleteOrderNumber: ''
 }">
     <!-- Header -->
     <div class="flex flex-col sm:flex-row sm:items-center justify-between gap-4 mb-8">
@@ -87,6 +90,30 @@
         </form>
     </div>
 
+    <!-- ✅ BULK ACTION BAR -->
+    <div x-show="selectedOrders.length > 0" 
+         x-transition
+         class="bg-red-50 border border-red-200 rounded-2xl p-4 mb-6 flex items-center justify-between">
+        <div class="flex items-center gap-3">
+            <span class="text-red-700 font-semibold">
+                <i class="bi bi-check-square-fill"></i>
+                <span x-text="selectedOrders.length"></span> order selected
+            </span>
+        </div>
+        <form action="{{ route('admin.orders.bulk') }}" method="POST" class="flex items-center gap-3">
+            @csrf
+            <input type="hidden" name="action" value="delete">
+            <template x-for="id in selectedOrders" :key="id">
+                <input type="hidden" name="orders[]" :value="id">
+            </template>
+            <button type="submit" 
+                    onclick="return confirm('Are you sure you want to delete selected orders? This action cannot be undone.')"
+                    class="btn-danger flex items-center gap-2">
+                <i class="bi bi-trash"></i> Delete Selected
+            </button>
+        </form>
+    </div>
+
     <!-- Orders Table -->
     <div class="bg-white border border-slate-200 rounded-2xl overflow-hidden">
         <div class="overflow-x-auto">
@@ -151,10 +178,17 @@
                             <div class="text-xs text-slate-500">{{ $order->created_at->format('H:i') }}</div>
                         </td>
                         <td class="px-6 py-4 text-right">
-                            <a href="{{ route('admin.orders.show', $order) }}" 
-                               class="inline-flex items-center gap-2 px-4 py-2 bg-slate-800 text-white rounded-lg text-sm font-semibold hover:bg-slate-700 transition">
-                                View <i class="bi bi-arrow-right"></i>
-                            </a>
+                            <div class="flex items-center justify-end gap-2">
+                                <a href="{{ route('admin.orders.show', $order) }}" 
+                                   class="inline-flex items-center gap-2 px-4 py-2 bg-slate-800 text-white rounded-lg text-sm font-semibold hover:bg-slate-700 transition">
+                                    View <i class="bi bi-arrow-right"></i>
+                                </a>
+                                <!-- ✅ DELETE BUTTON -->
+                                <button @click="deleteOrderId = {{ $order->id }}; deleteOrderNumber = '{{ $order->order_number }}'; showDeleteModal = true"
+                                        class="inline-flex items-center gap-2 px-3 py-2 bg-red-50 text-red-600 rounded-lg text-sm font-semibold hover:bg-red-100 transition border border-red-200">
+                                    <i class="bi bi-trash"></i>
+                                </button>
+                            </div>
                         </td>
                     </tr>
                     @empty
@@ -177,6 +211,34 @@
             {{ $orders->links() }}
         </div>
         @endif
+    </div>
+
+    <!-- ✅ DELETE CONFIRMATION MODAL -->
+    <div x-show="showDeleteModal" x-cloak class="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/50" x-transition.opacity>
+        <div class="bg-white rounded-2xl max-w-md w-full p-6 shadow-2xl" @click.away="showDeleteModal = false">
+            <div class="text-center mb-6">
+                <div class="w-16 h-16 bg-red-50 rounded-full flex items-center justify-center mx-auto mb-4">
+                    <i class="bi bi-exclamation-triangle text-2xl text-red-600"></i>
+                </div>
+                <h3 class="text-xl font-bold text-slate-800 mb-2">Delete Order</h3>
+                <p class="text-slate-500">
+                    Are you sure you want to delete order <span class="font-bold text-slate-800" x-text="'#' + deleteOrderNumber"></span>? 
+                    This action cannot be undone and stock will be restored.
+                </p>
+            </div>
+            <div class="flex gap-3">
+                <button @click="showDeleteModal = false" class="flex-1 px-4 py-3 border border-slate-200 rounded-xl font-semibold text-slate-700 hover:bg-slate-50 transition">
+                    Cancel
+                </button>
+                <form :action="'{{ url('admin/orders') }}/' + deleteOrderId" method="POST" class="flex-1">
+                    @csrf
+                    @method('DELETE')
+                    <button type="submit" class="w-full px-4 py-3 bg-red-600 text-white rounded-xl font-semibold hover:bg-red-700 transition">
+                        Delete Order
+                    </button>
+                </form>
+            </div>
+        </div>
     </div>
 </div>
 @endsection
