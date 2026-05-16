@@ -262,29 +262,100 @@
             background: #e2e8f0;
         }
 
-        .alert-success {
-            background: #d1fae5;
-            border: 1px solid #a7f3d0;
-            color: #065f46;
-            padding: 12px 16px;
-            border-radius: 12px;
-            font-size: 14px;
-            font-weight: 500;
-            display: flex;
-            align-items: center;
-            gap: 8px;
-            animation: slideIn 0.3s ease;
+        /* ✅ BİLDİRİM STİLLERİ - HEADER'DAN BAĞIMSIZ */
+        .notification-container {
+            position: fixed;
+            top: 24px;
+            right: 24px;
+            z-index: 100000; /* Header'dan (9999) çok yüksek */
+            max-width: 400px;
+            width: calc(100% - 48px);
+            pointer-events: none;
         }
 
-        @keyframes slideIn {
+        .notification {
+            padding: 16px 20px;
+            border-radius: 16px;
+            font-size: 14px;
+            font-weight: 600;
+            display: flex;
+            align-items: center;
+            gap: 12px;
+            margin-bottom: 12px;
+            box-shadow: 0 10px 40px rgba(0,0,0,0.15);
+            animation: notificationSlide 0.4s cubic-bezier(0.16, 1, 0.3, 1);
+            pointer-events: auto;
+            border-left: 4px solid;
+        }
+
+        @keyframes notificationSlide {
             from {
                 opacity: 0;
-                transform: translateY(-10px);
+                transform: translateX(100px) scale(0.9);
             }
             to {
                 opacity: 1;
-                transform: translateY(0);
+                transform: translateX(0) scale(1);
             }
+        }
+
+        .notification-success {
+            background: white;
+            border-left-color: #10b981;
+            color: #065f46;
+        }
+
+        .notification-error {
+            background: white;
+            border-left-color: #ef4444;
+            color: #991b1b;
+        }
+
+        .notification-info {
+            background: white;
+            border-left-color: #3b82f6;
+            color: #1e40af;
+        }
+
+        .notification-icon {
+            width: 36px;
+            height: 36px;
+            border-radius: 10px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 18px;
+            flex-shrink: 0;
+        }
+
+        .notification-success .notification-icon {
+            background: #d1fae5;
+            color: #059669;
+        }
+
+        .notification-error .notification-icon {
+            background: #fee2e2;
+            color: #dc2626;
+        }
+
+        .notification-info .notification-icon {
+            background: #dbeafe;
+            color: #2563eb;
+        }
+
+        .notification-close {
+            margin-left: auto;
+            color: #9ca3af;
+            cursor: pointer;
+            padding: 4px;
+            border-radius: 6px;
+            transition: all 0.2s;
+            flex-shrink: 0;
+        }
+
+        .notification-close:hover {
+            background: #f3f4f6;
+            color: #374151;
         }
 
         .verification-box {
@@ -378,7 +449,7 @@
             border-color: #4f46e5;
         }
 
-        /* SCROLL TO TOP BUTTON - HEM MOBIL HEM PC */
+        /* SCROLL TO TOP BUTTON */
         .scroll-to-top {
             position: fixed;
             bottom: 24px;
@@ -418,7 +489,6 @@
             transform: translateY(-2px);
         }
 
-        /* PC'de biraz daha büyük */
         @media (min-width: 768px) {
             .scroll-to-top {
                 width: 56px;
@@ -441,18 +511,6 @@
     scrollThreshold: 300,
     
     init() {
-        @if (session('status') === 'profile-updated')
-            this.$dispatch('toast', { type: 'success', title: 'Success', message: 'Profile updated successfully!' });
-        @endif
-        
-        @if (session('status') === 'password-updated')
-            this.$dispatch('toast', { type: 'success', title: 'Success', message: 'Password updated successfully!' });
-        @endif
-        
-        @if (session('status') === 'verification-link-sent')
-            this.$dispatch('toast', { type: 'success', title: 'Email Sent', message: 'Verification link sent to your email!' });
-        @endif
-        
         this.setupScrollListener();
     },
     
@@ -489,28 +547,70 @@
     }
 }" x-init="init()">
 
-<!-- Toast Notifications -->
-<div class="fixed top-4 right-4 left-4 sm:left-auto z-50 flex flex-col gap-2 pointer-events-none">
-    <template x-for="toast in $store.toasts.items" :key="toast.id">
-        <div class="pointer-events-auto bg-white rounded-2xl shadow-lg border-l-4 p-4 flex items-center gap-3 animate-slide-in"
-             :class="toast.type === 'success' ? 'border-green-500' : 'border-red-500'"
-             x-show="true"
-             x-transition:leave="transition ease-in duration-200"
-             x-transition:leave-start="opacity-100"
-             x-transition:leave-end="opacity-0">
-            <div class="w-10 h-10 rounded-full flex items-center justify-center"
-                 :class="toast.type === 'success' ? 'bg-green-100 text-green-600' : 'bg-red-100 text-red-600'">
-                <i class="bi" :class="toast.type === 'success' ? 'bi-check-lg' : 'bi-exclamation-triangle-fill'"></i>
+
+<div class="notification-container">
+    @if(session('success'))
+        <div class="notification notification-success" 
+             x-data="{ show: true }" 
+             x-show="show" 
+             x-init="setTimeout(() => show = false, 5000)"
+             x-transition:leave="transition ease-in duration-300"
+             x-transition:leave-start="opacity-100 transform translate-x-0"
+             x-transition:leave-end="opacity-0 transform translate-x-full">
+            <div class="notification-icon">
+                <i class="bi bi-check-circle-fill"></i>
             </div>
             <div class="flex-1">
-                <div class="font-semibold text-gray-900" x-text="toast.title"></div>
-                <div class="text-sm text-gray-500" x-text="toast.message"></div>
+                <div style="font-weight: 700; margin-bottom: 2px;">Başarılı!</div>
+                <div style="font-weight: 500; opacity: 0.9;">{{ session('success') }}</div>
             </div>
-            <button @click="$store.toasts.remove(toast.id)" class="text-gray-400 hover:text-gray-600">
+            <button @click="show = false" class="notification-close">
                 <i class="bi bi-x-lg"></i>
             </button>
         </div>
-    </template>
+    @endif
+
+    @if(session('error'))
+        <div class="notification notification-error" 
+             x-data="{ show: true }" 
+             x-show="show" 
+             x-init="setTimeout(() => show = false, 5000)"
+             x-transition:leave="transition ease-in duration-300"
+             x-transition:leave-start="opacity-100 transform translate-x-0"
+             x-transition:leave-end="opacity-0 transform translate-x-full">
+            <div class="notification-icon">
+                <i class="bi bi-x-circle-fill"></i>
+            </div>
+            <div class="flex-1">
+                <div style="font-weight: 700; margin-bottom: 2px;">Hata!</div>
+                <div style="font-weight: 500; opacity: 0.9;">{{ session('error') }}</div>
+            </div>
+            <button @click="show = false" class="notification-close">
+                <i class="bi bi-x-lg"></i>
+            </button>
+        </div>
+    @endif
+
+    @if(session('status'))
+        <div class="notification notification-info" 
+             x-data="{ show: true }" 
+             x-show="show" 
+             x-init="setTimeout(() => show = false, 5000)"
+             x-transition:leave="transition ease-in duration-300"
+             x-transition:leave-start="opacity-100 transform translate-x-0"
+             x-transition:leave-end="opacity-0 transform translate-x-full">
+            <div class="notification-icon">
+                <i class="bi bi-info-circle-fill"></i>
+            </div>
+            <div class="flex-1">
+                <div style="font-weight: 700; margin-bottom: 2px;">Bilgi</div>
+                <div style="font-weight: 500; opacity: 0.9;">{{ session('status') }}</div>
+            </div>
+            <button @click="show = false" class="notification-close">
+                <i class="bi bi-x-lg"></i>
+            </button>
+        </div>
+    @endif
 </div>
 
 <!-- SCROLL TO TOP BUTTON -->
@@ -885,22 +985,6 @@
         </form>
     </div>
 </div>
-
-<script>
-    document.addEventListener('alpine:init', () => {
-        Alpine.store('toasts', {
-            items: [],
-            add(type, title, message) {
-                const id = Date.now();
-                this.items.push({ id, type, title, message });
-                setTimeout(() => this.remove(id), 4000);
-            },
-            remove(id) {
-                this.items = this.items.filter(item => item.id !== id);
-            }
-        });
-    });
-</script>
 
 </body>
 </html>
