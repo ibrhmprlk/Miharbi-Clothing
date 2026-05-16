@@ -6,6 +6,7 @@
 <div x-data="{ 
     statusModal: false,
     trackingModal: false,
+    deleteModal: false,
     selectedStatus: '{{ $order->status }}'
 }">
     <!-- Header -->
@@ -37,8 +38,36 @@
                 <i class="bi bi-truck"></i> Add Tracking
             </button>
             @endif
+
+            <!-- ✅ DELETE BUTTON -->
+            <button @click="deleteModal = true" class="btn-danger flex items-center gap-2">
+                <i class="bi bi-trash"></i> Delete Order
+            </button>
         </div>
     </div>
+
+    @php
+        // ✅ ORDER SUMMARY HESAPLAMA DÜZELTMESİ
+        // OrderItem modelinde: unit_price, quantity, total_price (veya total)
+        // subtotal = tüm aktif item'ların (unit_price * quantity) toplamı
+        $calculatedSubtotal = $order->items->sum(function($item) {
+            return $item->unit_price * $item->quantity;
+        });
+        
+        // Veya eğer OrderItem'da total_price varsa:
+        // $calculatedSubtotal = $order->items->sum('total_price');
+        
+        $shipping = $order->shipping_cost ?? 0;
+        $discount = $order->discount_amount ?? 0;
+        $tax = $order->tax_amount ?? 0;
+        
+        // Eğer DB'de tax hesaplanmışsa onu kullan, yoksa hesapla
+        if ($tax == 0 && $calculatedSubtotal > 0) {
+            $tax = $calculatedSubtotal * 0.18; // %18 KDV
+        }
+        
+        $calculatedTotal = $calculatedSubtotal + $shipping + $tax - $discount;
+    @endphp
 
     <div class="grid lg:grid-cols-3 gap-6">
         <!-- Left Column -->
@@ -268,8 +297,8 @@
                 <div class="space-y-3 text-sm">
                     <div class="font-semibold text-slate-800">{{ $order->shipping_full_name }}</div>
                     <div class="text-slate-600 leading-relaxed">
-                        {{ $order->shipping_address }}<br>
-                        {{ $order->shipping_district }}, {{ $order->shipping_city }}<br>
+                        {{ $order->shipping_address }}<<br>
+                        {{ $order->shipping_district }}, {{ $order->shipping_city }}<<br>
                         {{ $order->shipping_zip }}
                     </div>
                     <div class="pt-3 border-t border-slate-200 flex items-center gap-2 text-slate-700">
@@ -348,23 +377,17 @@
                 </div>
             </div>
 
-            <!-- Order Summary -->
+            <!-- ✅ ORDER SUMMARY - DÜZELTİLMİŞ HESAPLAMA -->
             <div class="bg-slate-800 text-white rounded-2xl p-6">
                 <h3 class="font-bold mb-4 flex items-center gap-2">
                     <i class="bi bi-receipt"></i>
                     Order Summary
                 </h3>
-                @php
-                    $subtotal  = $order->subtotal        ?? 0;
-                    $shipping  = $order->shipping_cost   ?? 0;
-                    $discount  = $order->discount_amount ?? 0;
-                    $tax       = $order->tax_amount      ?? 0;
-                    $total     = $order->total           ?? 0;
-                @endphp
                 <div class="space-y-3 text-sm">
+        
                     <div class="flex justify-between">
                         <span class="text-slate-400">Subtotal</span>
-                        <span>{{ number_format($subtotal, 2, ',', '.') }} ₺</span>
+                        <span>{{ number_format($calculatedSubtotal, 2, ',', '.') }} ₺</span>
                     </div>
                     <div class="flex justify-between">
                         <span class="text-slate-400">Shipping</span>
@@ -386,7 +409,7 @@
                     @endif
                     <div class="pt-3 border-t border-slate-700 flex justify-between text-lg font-bold">
                         <span>Total</span>
-                        <span>{{ number_format($total, 2, ',', '.') }} ₺</span>
+                        <span>{{ number_format($calculatedTotal, 2, ',', '.') }} ₺</span>
                     </div>
                 </div>
 
@@ -464,6 +487,34 @@
                     <button type="submit" class="flex-1 btn-primary justify-center">Save & Mark Shipped</button>
                 </div>
             </form>
+        </div>
+    </div>
+
+    <!-- ✅ DELETE CONFIRMATION MODAL -->
+    <div x-show="deleteModal" x-cloak class="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/50" x-transition.opacity>
+        <div class="bg-white rounded-2xl max-w-md w-full p-6 shadow-2xl" @click.away="deleteModal = false">
+            <div class="text-center mb-6">
+                <div class="w-16 h-16 bg-red-50 rounded-full flex items-center justify-center mx-auto mb-4">
+                    <i class="bi bi-exclamation-triangle text-2xl text-red-600"></i>
+                </div>
+                <h3 class="text-xl font-bold text-slate-800 mb-2">Delete Order</h3>
+                <p class="text-slate-500">
+                    Are you sure you want to delete order <span class="font-bold text-slate-800">#{{ $order->order_number }}</span>? 
+                    This action cannot be undone and stock will be restored.
+                </p>
+            </div>
+            <div class="flex gap-3">
+                <button @click="deleteModal = false" class="flex-1 px-4 py-3 border border-slate-200 rounded-xl font-semibold text-slate-700 hover:bg-slate-50 transition">
+                    Cancel
+                </button>
+                <form action="{{ route('admin.orders.destroy', $order) }}" method="POST" class="flex-1">
+                    @csrf
+                    @method('DELETE')
+                    <button type="submit" class="w-full px-4 py-3 bg-red-600 text-white rounded-xl font-semibold hover:bg-red-700 transition">
+                        Delete Order
+                    </button>
+                </form>
+            </div>
         </div>
     </div>
 </div>
