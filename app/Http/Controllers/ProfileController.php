@@ -34,7 +34,9 @@ class ProfileController extends Controller
 
         $request->user()->save();
 
-        return Redirect::route('profile.edit')->with('status', 'profile-updated');
+        // ✅ DÜZELTİLDİ: 'success' key kullan
+        return Redirect::route('profile.edit')
+            ->with('success', 'Profile updated successfully!');
     }
 
     /**
@@ -55,9 +57,13 @@ class ProfileController extends Controller
         $request->session()->invalidate();
         $request->session()->regenerateToken();
 
-        return Redirect::to('/');
+        // ✅ DÜZELTİLDİ: 'success' key kullan
+        return Redirect::to('/')
+            ->with('success', 'Your account has been deleted successfully.');
     }
-    public function create(){
+
+    public function create()
+    {
         return view('create');
     }
 }
