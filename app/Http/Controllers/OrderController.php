@@ -58,13 +58,14 @@ class OrderController extends Controller
 
         try {
             // Stokları geri ekle (iptal edilmemiş ürünler için)
-            foreach ($order->items as $item) {
-                if ($item->return_status === 'none' || $item->status !== 'cancelled') {
-                    UrunVariant::where('id', $item->urun_variant_id)
-                        ->increment('stock', $item->quantity);
-                }
-            }
-
+      if (in_array($order->status, ['pending', 'approved', 'processing'])) {
+    foreach ($order->items as $item) {
+        if ($item->status !== 'cancelled') {
+            UrunVariant::where('id', $item->urun_variant_id)
+                ->increment('stock', $item->quantity);
+        }
+    }
+}
             // İlişkili kayıtları sil (reviews, order_items cascade olmalı migration'da)
             // Eğer cascade yoksa manuel sil:
             // $order->items()->delete();
@@ -87,44 +88,45 @@ class OrderController extends Controller
     /**
      * Admin: Bulk order actions (delete)
      */
-    public function bulkOrderAction(Request $request)
-    {
-        $validated = $request->validate([
-            'action' => 'required|in:delete',
-            'orders' => 'required|array',
-            'orders.*' => 'exists:orders,id', // MyOrder $table = 'orders'
-        ]);
+   public function bulkOrderAction(Request $request)
+{
+    $validated = $request->validate([
+        'action' => 'required|in:delete',
+        'orders' => 'required|array',
+        'orders.*' => 'exists:orders,id',
+    ]);
 
-        $ids = $validated['orders'];
-        $deletedCount = 0;
+    $ids = $validated['orders'];
+    $deletedCount = 0;
 
-        DB::beginTransaction();
+    DB::beginTransaction();
 
-        try {
-            foreach (MyOrder::whereIn('id', $ids)->get() as $order) {
-                // Stokları geri ekle
+    try {
+        foreach (MyOrder::whereIn('id', $ids)->get() as $order) {
+            if (in_array($order->status, ['pending', 'approved', 'processing'])) {
                 foreach ($order->items as $item) {
-                    if ($item->return_status === 'none' || $item->status !== 'cancelled') {
+                    if ($item->status !== 'cancelled') {
                         UrunVariant::where('id', $item->urun_variant_id)
                             ->increment('stock', $item->quantity);
                     }
                 }
-                $order->delete();
-                $deletedCount++;
             }
-
-            DB::commit();
-
-            return redirect()->back()
-                ->with('success', "{$deletedCount} orders deleted successfully");
-
-        } catch (\Exception $e) {
-            DB::rollback();
-            \Log::error('Bulk order delete error: ' . $e->getMessage());
-            return redirect()->back()
-                ->with('error', 'Failed to delete orders.');
+            $order->delete();
+            $deletedCount++;
         }
+
+        DB::commit();
+
+        return redirect()->back()
+            ->with('success', "{$deletedCount} orders deleted successfully");
+
+    } catch (\Exception $e) {
+        DB::rollback();
+        \Log::error('Bulk order delete error: ' . $e->getMessage());
+        return redirect()->back()
+            ->with('error', 'Failed to delete orders.');
     }
+}
     /**
      * Bireysel ürün iptali
      */
